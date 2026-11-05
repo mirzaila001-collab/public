@@ -98,7 +98,7 @@ footer{color:var(--muted);font-size:12px;margin-top:18px}
   </div>
   <section class="grid-3">
     <article class="card"><span class="tag a">۱ · تولید</span><h3>نوشتن</h3><p>از تب صف کار، ردیف‌های بالای فهرست. اول خطای قطعی روی صفحه‌ای که نمایش دارد. متن را طبق بریف پایین بنویس، حدود ۱۰۰۰ کلمه.</p></article>
-    <article class="card"><span class="tag b">۲ · بارگذاری</span><h3>نشاندن روی سایت</h3><p>توضیح محصول یا دسته، عنوان سئو و متا در رنک‌مث، متن جایگزین تصویر، و یک پیوند داخلی. بعد دکمه بارگذاری را بزن. مرحله در فایل stages.json می‌ماند.</p></article>
+    <article class="card"><span class="tag b">۲ · بارگذاری</span><h3>نشاندن روی سایت</h3><p>توضیح محصول یا دسته، عنوان سئو و متا در رنک‌مث، متن جایگزین تصویر، و یک پیوند داخلی. بعد دکمه بارگذاری را بزن. مرحله برای همه می‌ماند.</p></article>
     <article class="card"><span class="tag c">صف</span><h3>چرا این ترتیب</h3><p>امتیاز از نمایش و رتبه سرچ کنسول، به‌اضافه خطای عدد و خالی بودن متن. صفحه‌ای که رتبه ۱ برند است و کلیک می‌گیرد، برای بازنویسی جلو نمی‌افتد.</p></article>
   </section>
   <section class="brief">
@@ -792,9 +792,20 @@ footer{color:var(--muted);font-size:12px;margin-top:18px}
 
 <script>
 var KEY = "romatone-stage-v1";
+var STORE = "https://mantledb.sh/v2/romatone36cc2958d5916555/stages";
+var STORE_KEY = "1b178c4caa0578c30e90873cc1c7ce1a5b8aaab43aedf3940dc30692a1e33215";
 var stages = {};
 var shared = false;
+var saving = 0;
 function remember(){ try { localStorage.setItem(KEY, JSON.stringify(stages)); } catch(e){} }
+function cleanMap(map){
+  var out = {};
+  if (!map || typeof map !== "object" || Array.isArray(map)) return out;
+  Object.keys(map).forEach(function(k){
+    if ((map[k] === "write" || map[k] === "live") && k.length <= 80 && !/\s/.test(k)) out[k] = map[k];
+  });
+  return out;
+}
 function paint(){
   document.querySelectorAll(".stepper").forEach(function(box){
     var st = stages[box.dataset.id] || "open";
@@ -811,45 +822,56 @@ function paint(){
   if (el) el.textContent = String(n).replace(/[0-9]/g, function(d){ return "۰۱۲۳۴۵۶۷۸۹"[d]; });
   var sync = document.getElementById("stageSync");
   if (sync) sync.textContent = shared
-    ? "روی فایل مشترک stages.json ذخیره می‌شود و برای بقیه هم می‌ماند."
-    : "الان فقط در همین مرورگر است. برد را از سرور باز کن تا در فایل مشترک بماند.";
+    ? "مرحله برای همه ذخیره می‌شود و با باز کردن دوباره می‌ماند."
+    : "ذخیره مشترک الان قطع است. دکمه را دوباره بزن.";
 }
 function applyMap(map){
-  stages = map || {};
+  stages = cleanMap(map);
   remember();
   paint();
   document.querySelectorAll(".panel").forEach(apply);
 }
 function pullStages(){
-  return fetch("/api/stages", {cache:"no-store"}).then(function(r){
-    if (!r.ok) throw new Error("no api");
+  return fetch(STORE, {cache:"no-store", headers:{"X-Mantle-Key": STORE_KEY}}).then(function(r){
+    if (!r.ok) throw new Error("no store");
     shared = true;
     return r.json();
-  }).then(applyMap);
+  }).then(function(map){ if (!saving) applyMap(map); });
 }
 document.querySelectorAll(".stepper").forEach(function(box){
   box.addEventListener("click", function(ev){
     var btn = ev.target.closest("button");
     if (!btn) return;
-    var cur = stages[box.dataset.id] || "open";
+    var id = box.dataset.id;
+    var cur = stages[id] || "open";
     var next = btn.dataset.set;
     var stage = cur;
     if (next === "write") stage = cur === "write" ? "open" : "write";
     if (next === "live") stage = cur === "live" ? "write" : "live";
-    if (stage === "open") delete stages[box.dataset.id]; else stages[box.dataset.id] = stage;
+    if (stage === "open") delete stages[id]; else stages[id] = stage;
     remember(); paint();
     document.querySelectorAll(".panel").forEach(apply);
-    if (!shared) return;
-    fetch("/api/stages", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({id: box.dataset.id, stage: stage})
-    }).then(function(r){ if (!r.ok) throw new Error("save"); return r.json(); })
-      .then(applyMap)
-      .catch(function(){ shared = false; paint(); });
+    var body = {};
+    body[id] = stage === "open" ? null : stage;
+    saving++;
+    fetch(STORE, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json", "X-Mantle-Key": STORE_KEY},
+      body: JSON.stringify(body)
+    }).then(function(r){
+      if (!r.ok) throw new Error("save");
+      shared = true;
+      paint();
+    }).catch(function(){ shared = false; paint(); })
+      .then(function(){ saving = Math.max(0, saving - 1); });
   });
 });
-setInterval(function(){ if (shared) pullStages().catch(function(){}); }, 8000);
+try { stages = cleanMap(JSON.parse(localStorage.getItem(KEY) || "{}")); } catch(e) {}
+paint();
+pullStages().catch(function(){ shared = false; paint(); });
+document.addEventListener("visibilitychange", function(){
+  if (document.visibilityState === "visible") pullStages().catch(function(){});
+});
 function apply(panel){
   if (!panel) return;
   var on = panel.querySelector(".filters button.on");
